@@ -14,12 +14,8 @@ class InjectorMacros(val c: blackbox.Context) {
     val transformed = annottees.map{
       case ClassDef(cmod, cname, ctps, Template(cparents, cself, body)) =>
         val (newBody, bound) = ModuleTreeTransformer(body)
-        val injections = q"type Bindings = ${mkBindings(bound.map(_._1))}"
-        val injectCases = bound.map { case (tpe, _) =>
-          cq"${tpe.typeSymbol.fullName} => this.${boundName(tpe)}"
-        }
-        val inject = q"def injectUnsafe(id: String): Option[Any] = PartialFunction.condOpt(id) { case ..$injectCases }"
-        val res = ClassDef(cmod, cname, ctps, Template(cparents, cself, newBody ::: List(injections, inject)))
+        val bindings = q"type Bindings = ${mkBindings(bound.map(_._1))}"
+        val res = ClassDef(cmod, cname, ctps, Template(cparents, cself, newBody ::: List(bindings)))
         lazy val boundInfo = bound.map { case (tpe, bound) => s"  * $tpe <- $bound" }
         if (log) c.info(c.enclosingPosition, s"$cname bindings:\n${boundInfo.mkString("\n")}", force = true)
         res
@@ -119,13 +115,15 @@ class InjectorMacros(val c: blackbox.Context) {
     val moduleBindings     = unpackBindings(module.tpe.decl(TypeName("Bindings")).typeSignature)
     val requiredInjections = unpackBindings(weakTypeOf[R])
     val lackingBindings    = requiredInjections.filterNot(moduleBindings.contains)
-    if (lackingBindings.isEmpty)
+    if (lackingBindings.isEmpty) {
+      val injectCases = requiredInjections.map { tpe => cq"${tpe.typeSymbol.fullName} => $module.${boundName(tpe)}" }
       q"""
-       new _root_.io.github.fehu.inj.Injector {
-         type Injections = ${weakTypeOf[R]}
-         def injectUnsafe(id: String): Option[Any] = ???
-       }
-     """
+        new _root_.io.github.fehu.inj.Injector {
+          type Injections = ${weakTypeOf[R]}
+          def injectUnsafe(id: String): Option[Any] = PartialFunction.condOpt(id) { case ..$injectCases }
+        }
+      """
+    }
     else c.abort(c.enclosingPosition, s"Module $module lacks following bindings:${lackingBindings.mkString("\n  * ", "\n  * ", "")}")
   }
 
