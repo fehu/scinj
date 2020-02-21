@@ -8,7 +8,7 @@ lazy val root = (project in file("."))
     addCompilerPlugin(Dependencies.Plugins.`macro-paradise`),
     libraryDependencies ++= Seq(
       Dependencies.scalaReflect.value,
-      Dependencies.shapeless,
+      Dependencies.shapeless % Test,
       Dependencies.scalaTest % Test
     )
   )

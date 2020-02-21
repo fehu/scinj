@@ -1,17 +1,18 @@
 package io.github.fehu.inj.macros
 
-import scala.reflect.macros.whitebox
+import scala.annotation.tailrec
+import scala.reflect.macros.blackbox
 
-import shapeless.CaseClassMacros
+import io.github.fehu.inj.{ Injector, Module }
 
-class InjectorMacros(val c: whitebox.Context) extends CaseClassMacros {
+class InjectorMacros(val c: blackbox.Context) {
   import c.universe._
 
   def moduleTransform(annottees: Tree*): Tree = {
     val transformed = annottees.map{
       case ClassDef(cmod, cname, ctps, Template(cparents, cself, body)) =>
         val (newBody, bound) = ModuleTreeTransformer(body)
-        val injections = q"type Injections = ${mkHListTpe(bound)}"
+        val injections = q"type Bindings = ${mkBindings(bound)}"
         val injectCases = bound.map { tpe =>
           cq"${tpe.typeSymbol.fullName} => this.${boundName(tpe)}"
         }
@@ -68,7 +69,7 @@ class InjectorMacros(val c: whitebox.Context) extends CaseClassMacros {
     val transformed = annottees.map{
       case ClassDef(cmod, cname, ctps, Template(cparents, cself, body)) =>
         val (newBody, injected) = InjectableTreeTransformer(body)
-        val dependencies = q"type InjectionDependencies = ${mkHListTpe(injected)}"
+        val dependencies = q"type InjectionDependencies = ${mkBindings(injected)}"
         ClassDef(cmod, cname, ctps, Template(cparents, cself, newBody ::: List(dependencies)))
       case other => other
     }
@@ -95,28 +96,44 @@ class InjectorMacros(val c: whitebox.Context) extends CaseClassMacros {
   }
 
   def inject[T: WeakTypeTag]: Tree = {
-    val bindings = unpackHListTpe(c.prefix.tree.tpe.decl(TypeName("Injections")).typeSignature)
+    val bindings = unpackBindings(c.prefix.tree.tpe.decl(TypeName("Injections")).typeSignature)
     val tpe = weakTypeOf[T]
     if (!bindings.contains(tpe)) c.abort(c.enclosingPosition, s"No injection is defined for $tpe")
     else q"${c.prefix}.injectUnsafe(${tpe.typeSymbol.fullName}).get.asInstanceOf[$tpe]"
   }
 
 
-  def convert[From: WeakTypeTag, To: WeakTypeTag]: Tree = {
-    val From = weakTypeOf[From]
-    val To   = weakTypeOf[To]
-
-    val bindingsFrom = unpackHListTpe(From)
-    val bindingsTo   = unpackHListTpe(To)
-
-    if (bindingsTo.forall(bindingsFrom.contains))
+  def injectorFromModule[R: WeakTypeTag]: Tree = {
+    val module = c.inferImplicitValue(typeOf[Module]) match {
+      case EmptyTree => c.abort(c.enclosingPosition, s"No implicit module is in scope")
+      case module    => module
+    }
+    val moduleBindings     = unpackBindings(module.tpe.decl(TypeName("Bindings")).typeSignature)
+    val requiredInjections = unpackBindings(weakTypeOf[R])
+    val lackingBindings    = requiredInjections.filterNot(moduleBindings.contains)
+    if (lackingBindings.isEmpty)
       q"""
-        new _root_.io.github.fehu.inj.Injector.Convert[$From, $To] {
-          def apply(from: Injector.Aux[$From]): Injector.Aux[$To] = from.asInstanceOf[Injector.Aux[$To]]
-        }
-       """
-    else c.abort(c.enclosingPosition, s"Injector $From cannot be converted to $To")
+       new _root_.io.github.fehu.inj.Injector {
+         type Injections = ${weakTypeOf[R]}
+         def injectUnsafe(id: String): Option[Any] = ???
+       }
+     """
+    else c.abort(c.enclosingPosition, s"Module $module lacks following bindings:${lackingBindings.mkString("\n  * ", "\n  * ", "")}")
   }
 
+  protected def mkBindings(tpes: List[Type]): Type = tpes.foldLeft(BNilType) { (acc, tpe) => appliedType(BConsType, tpe, acc) }
+
+  protected def unpackBindings(tpe0: Type): List[Type] = {
+    @tailrec
+    def inner(tpe: Type, accRev: List[Type]): List[Type] = tpe match {
+      case TypeRef(_, BConsSymb, List(h, t)) => inner(t, h :: accRev)
+      case _ => accRev.reverse
+    }
+    inner(tpe0.dealias, Nil)
+  }
+
+  protected val BNilType  = typeOf[Injector.BNil.type]
+  protected val BConsType = typeOf[Injector.BCons[_, _]].typeConstructor
+  protected val BConsSymb = symbolOf[Injector.BCons[_, _]]
 }
 

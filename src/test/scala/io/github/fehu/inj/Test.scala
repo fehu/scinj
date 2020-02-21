@@ -50,5 +50,5 @@ object Test extends App {
   val sb = new TestServiceB
   println(sb.b)
 
-  shapeless.test.illTyped("new TestServiceC", "Not found injector providing io.github.fehu.inj.C :: shapeless.HNil")
+  shapeless.test.illTyped("new TestServiceC", "Module Test.this.m lacks following bindings:\n  \\* io.github.fehu.inj.C")
 }

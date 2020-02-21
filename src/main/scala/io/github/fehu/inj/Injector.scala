@@ -8,7 +8,7 @@ import io.github.fehu.inj.macros._
 trait Injector {
   import scala.language.experimental.macros
 
-  type Injections
+  type Injections <: Injector.Bindings
 
   def injectUnsafe(id: String): Option[Any]
 
@@ -18,17 +18,13 @@ trait Injector {
 object Injector {
   import scala.language.experimental.macros
 
-  @implicitNotFound("Not found injector providing ${I}")
-  type Aux[I] = Injector { type Injections = I }
+  type Aux[I <: Injector.Bindings] = Injector { type Injections = I }
 
-  implicit def injectorConversion[I, R](implicit inj: Injector.Aux[I], convert: Convert[I, R]): Injector.Aux[R] = convert(inj)
+  implicit def fromModule[R]: Injector.Aux[R] = macro InjectorMacros.injectorFromModule[R]
 
-  trait Convert[From, To] {
-    def apply(from: Injector.Aux[From]): Injector.Aux[To]
-  }
-  object Convert {
-    implicit def convertInjector[From, To]: Convert[From, To] = macro InjectorMacros.convert[From, To]
-  }
+  sealed trait Bindings
+  case class BCons[H, T <: Bindings](head: H, tail: Bindings) extends Bindings
+  case object BNil extends Bindings
 }
 
 
@@ -40,7 +36,7 @@ class injectable(log: Boolean = false) extends StaticAnnotation {
 }
 
 trait Injectable {
-  type InjectionDependencies
+  type InjectionDependencies <: Injector.Bindings
 
   protected def injector: Injector.Aux[InjectionDependencies]
 
@@ -59,8 +55,8 @@ class module(log: Boolean = false) extends StaticAnnotation {
   def macroTransform(annottees: Any*): Any = macro InjectorMacros.moduleTransform
 }
 
-trait Module extends Injector {
-  final def injector: Injector.Aux[Injections] = this
+trait Module {
+  type Bindings <: Injector.Bindings
 
   @compileTimeOnly("You must put @module annotation to bind injections")
   protected final def lazily: Binder = sys.error("@compileTimeOnly")
@@ -77,4 +73,7 @@ trait Module extends Injector {
   }
 
   protected class BindSetup // TODO
+}
+object Module {
+  type Aux[B <: Injector.Bindings] = Module { type Bindings = B }
 }
