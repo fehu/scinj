@@ -1,0 +1,9 @@
+*.class
+*.log
+target/
+
+.amm/
+!.amm/predef.sc
+
+.idea/
+.bloop/
