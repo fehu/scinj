@@ -9,34 +9,39 @@ class InjectorMacros(val c: blackbox.Context) {
   import c.universe._
 
   def moduleTransform(annottees: Tree*): Tree = {
+    // TODO: refactor
+    val log = PartialFunction.cond(c.prefix.tree) { case q"new module(log = true)" => true }
     val transformed = annottees.map{
       case ClassDef(cmod, cname, ctps, Template(cparents, cself, body)) =>
         val (newBody, bound) = ModuleTreeTransformer(body)
-        val injections = q"type Bindings = ${mkBindings(bound)}"
-        val injectCases = bound.map { tpe =>
+        val injections = q"type Bindings = ${mkBindings(bound.map(_._1))}"
+        val injectCases = bound.map { case (tpe, _) =>
           cq"${tpe.typeSymbol.fullName} => this.${boundName(tpe)}"
         }
         val inject = q"def injectUnsafe(id: String): Option[Any] = PartialFunction.condOpt(id) { case ..$injectCases }"
-        ClassDef(cmod, cname, ctps, Template(cparents, cself, newBody ::: List(injections, inject)))
+        val res = ClassDef(cmod, cname, ctps, Template(cparents, cself, newBody ::: List(injections, inject)))
+        lazy val boundInfo = bound.map { case (tpe, bound) => s"  * $tpe <- $bound" }
+        if (log) c.info(c.enclosingPosition, s"$cname bindings:\n${boundInfo.mkString("\n")}", force = true)
+        res
       case other => other
     }
     q"..$transformed"
   }
 
   protected object ModuleTreeTransformer {
-    def apply(trees: List[Tree]): (List[Tree], List[Type]) = {
+    def apply(trees: List[Tree]): (List[Tree], List[(Type, Tree)]) = {
       val trans = new ModuleTreeTransformer
       val t = trans.transformTrees(trees)
       (t, trans.bound)
     }
   }
   protected class ModuleTreeTransformer extends Transformer {
-    var bound: List[Type] = Nil
+    var bound: List[(Type, Tree)] = Nil
 
     override def transform(tree: Tree): Tree = tree match {
       case q"$bindM.bind[$tpe0]($bindV)" =>
         val tpe = safeType(tpe0)
-        bound ::= tpe
+        bound ::= tpe -> bindV
         val name = boundName(tpe)
         (bindM.toString: @unchecked) match {
            case "lazily"   => q"final lazy val $name = $bindV"
@@ -66,10 +71,13 @@ class InjectorMacros(val c: blackbox.Context) {
 
   def injectableTransform(annottees: Tree*): Tree = {
     // TODO: duplication
+    val log = PartialFunction.cond(c.prefix.tree) { case q"new injectable(log = true)" => true }
     val transformed = annottees.map{
       case ClassDef(cmod, cname, ctps, Template(cparents, cself, body)) =>
         val (newBody, injected) = InjectableTreeTransformer(body)
         val dependencies = q"type InjectionDependencies = ${mkBindings(injected)}"
+        lazy val injectedInfo = injected.map(tpe => s"  * $tpe")
+        if (log) c.info(c.enclosingPosition, s"$cname injections:\n${injectedInfo.mkString("\n")}", force = true)
         ClassDef(cmod, cname, ctps, Template(cparents, cself, newBody ::: List(dependencies)))
       case other => other
     }

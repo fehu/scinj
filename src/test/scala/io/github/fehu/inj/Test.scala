@@ -30,7 +30,7 @@ class TestServiceA(implicit val injector: Injector.Aux[TestServiceA#InjectionDep
   val a = inject[A]
 }
 
-@injectable
+@injectable(log = true)
 class TestServiceB(implicit val injector: Injector.Aux[TestServiceB#InjectionDependencies]) extends Injectable {
   val b = inject[B]
 }
